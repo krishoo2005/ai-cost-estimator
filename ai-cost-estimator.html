@@ -1322,6 +1322,7 @@
   <script>
     const estimatorStorageKey = "construction-estimator-config-v1";
     let estimatorSelectedCityId = "";
+    let estimatorOtherCityName = "";
     let estimatorConfigLoadWarning = "";
 
     function makeEstimatorDemoConfig() {
@@ -1450,18 +1451,61 @@
       return estimatorConfig.cities.find(city => city.id === cityId);
     }
 
+    function cityWordEditDistance(left, right) {
+      const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+      for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+        let diagonal = previous[0];
+        previous[0] = leftIndex;
+        for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+          const above = previous[rightIndex];
+          previous[rightIndex] = Math.min(
+            previous[rightIndex] + 1,
+            previous[rightIndex - 1] + 1,
+            diagonal + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
+          );
+          diagonal = above;
+        }
+      }
+      return previous[right.length];
+    }
+
     function matchEnabledEstimatorCity(value) {
       const words = String(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
       if (!words.length) return null;
 
-      const matches = estimatorConfig.cities.filter(city => city.enabled && [city.name, city.district].some(name => {
+      const enabledCities = estimatorConfig.cities.filter(city => city.enabled);
+      const exactMatches = enabledCities.filter(city => [city.name, city.district].some(name => {
         const candidate = String(name).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
         if (!candidate.length || candidate.length > words.length) return false;
         return Array.from({ length: words.length - candidate.length + 1 }, (_, index) =>
           candidate.every((word, offset) => words[index + offset] === word)
         ).some(Boolean);
       }));
-      return matches.length === 1 ? matches[0] : null;
+      if (exactMatches.length) return exactMatches.length === 1 ? exactMatches[0] : null;
+
+      const scores = new Map();
+      enabledCities.forEach(city => {
+        [city.name, city.district].forEach(name => {
+          const candidate = String(name).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+          if (!candidate.length || candidate.length > words.length) return;
+          for (let start = 0; start <= words.length - candidate.length; start += 1) {
+            let score = 0;
+            let matches = true;
+            candidate.forEach((word, offset) => {
+              const inputWord = words[start + offset];
+              const distance = cityWordEditDistance(word, inputWord);
+              const tolerance = word.length >= 9 ? Math.floor(word.length * 0.2) : word.length >= 4 ? 1 : 0;
+              if (distance > tolerance) matches = false;
+              score += distance;
+            });
+            if (matches && (!scores.has(city.id) || score < scores.get(city.id))) scores.set(city.id, score);
+          }
+        });
+      });
+
+      const bestScore = Math.min(...scores.values());
+      const bestMatches = enabledCities.filter(city => scores.get(city.id) === bestScore);
+      return bestMatches.length === 1 ? bestMatches[0] : null;
     }
 
     function cityRate(cityId, category) {
@@ -1482,7 +1526,7 @@
       const select = document.getElementById("districtSelect");
       const previous = estimatorSelectedCityId || select.value;
       const enabledCities = estimatorConfig.cities.filter(city => city.enabled);
-      select.innerHTML = enabledCities.map(city => `<option value="${escapeEstimatorHtml(city.id)}">${escapeEstimatorHtml(city.name)} (${escapeEstimatorHtml(city.district)}, ${escapeEstimatorHtml(city.state)})</option>`).join("");
+      select.innerHTML = `${enabledCities.map(city => `<option value="${escapeEstimatorHtml(city.id)}">${escapeEstimatorHtml(city.name)} (${escapeEstimatorHtml(city.district)}, ${escapeEstimatorHtml(city.state)})</option>`).join("")}<option value="other">Other (city not listed)</option>`;
       estimatorSelectedCityId = enabledCities.some(city => city.id === previous)
         ? previous
         : enabledCities.find(city => city.name.toLowerCase() === "pune")?.id || enabledCities[0]?.id || "";
@@ -1561,7 +1605,7 @@
     }
 
     function getSelectedLocationName() {
-      return cityById(estimatorSelectedCityId)?.name || "Select a city";
+      return cityById(estimatorSelectedCityId)?.name || estimatorOtherCityName || "Select a city";
     }
 
     function getSelectedBaseRate() {
@@ -1668,7 +1712,7 @@
     }
 
     function getSelectedLocationName() {
-      return cityById(estimatorSelectedCityId)?.name || "Select a city";
+      return cityById(estimatorSelectedCityId)?.name || estimatorOtherCityName || "Select a city";
     }
 
     function readMaterialRates() {
@@ -1743,12 +1787,13 @@
       const totalArea = areaMode === "room-plan" ? roomPlan.totalArea : areaMode === "total" ? enteredArea : enteredArea * floors;
       if (!totalArea || !estimatorSelectedCityId) return;
       const city = cityById(estimatorSelectedCityId);
+      const cityName = city?.name || estimatorOtherCityName || "Other location";
       const selectedQualityOption = estimatorConfig.qualityOptions.find(option => option.name === selectedQuality);
       const qualityMultiplier = Number(selectedQualityOption?.multiplier) || 1;
       const estimate = estimateForArea(totalArea, floors, estimatorSelectedCityId, qualityMultiplier, readMaterialRates());
       document.getElementById("resultsBox").style.display = "block";
-      document.getElementById("projectSummary").textContent = `${city?.name || "Selected city"} · ${totalArea.toLocaleString("en-IN")} sq. ft. total · ${floors} floor${floors === 1 ? "" : "s"} · ${document.getElementById("constructionType").value} · ${selectedQuality} quality · planning rates`;
-      document.getElementById("floorPlanSummary").textContent = `${city?.name || "Selected city"} · ${floors} floor${floors === 1 ? "" : "s"} · ${roomPlan.totalArea.toLocaleString("en-IN")} sq. ft. across planned rooms`;
+      document.getElementById("projectSummary").textContent = `${cityName} · ${totalArea.toLocaleString("en-IN")} sq. ft. total · ${floors} floor${floors === 1 ? "" : "s"} · ${document.getElementById("constructionType").value} · ${selectedQuality} quality · planning rates`;
+      document.getElementById("floorPlanSummary").textContent = `${cityName} · ${floors} floor${floors === 1 ? "" : "s"} · ${roomPlan.totalArea.toLocaleString("en-IN")} sq. ft. across planned rooms`;
       document.getElementById("ratePerSqftText").textContent = `${totalArea.toLocaleString("en-IN")} sq. ft. total · ${floors} floor${floors === 1 ? "" : "s"}`;
       roomPlan.floorAreas.forEach((area, index) => {
         const floorLabel = document.getElementById(`floorArea_${index}`);
@@ -1757,6 +1802,7 @@
       document.getElementById("roomPlanAreaNote").textContent = `Planned rooms total ${roomPlan.totalArea.toLocaleString("en-IN")} sq. ft. ${areaMode === "room-plan" ? "This area is used in the estimate." : "Choose “Sum of room dimensions” to use this area in the estimate."}`;
       if (estimate.totalCost === null) {
         document.getElementById("totalCost").textContent = "Rate missing";
+        document.getElementById("bar-total-cost").textContent = "Rate missing";
         document.getElementById("costPerSqft").textContent = "--";
         document.getElementById("costPerFloor").textContent = "--";
         document.getElementById("budgetStatus").className = "budget-status neutral";
@@ -1813,6 +1859,7 @@
 
     function handleDistrictChange() {
       estimatorSelectedCityId = document.getElementById("districtSelect").value;
+      if (estimatorSelectedCityId !== "other") estimatorOtherCityName = "";
       initEstimatorRateInputs();
       calculateCost();
     }
@@ -2229,8 +2276,18 @@
         if (Number.isInteger(payload.floors) && payload.floors <= estimatorConfig.settings.maxFloors) { document.getElementById("floorsSelect").value = String(payload.floors); renderRoomPlan(); applied += 1; }
         if (payload.city) {
           const match = matchEnabledEstimatorCity(payload.city);
-          if (match) { document.getElementById("districtSelect").value = match.id; handleDistrictChange(); applied += 1; }
-          else unmatchedCity = payload.city;
+          if (match) {
+            estimatorOtherCityName = "";
+            document.getElementById("districtSelect").value = match.id;
+            handleDistrictChange();
+            applied += 1;
+          } else {
+            unmatchedCity = payload.city;
+            estimatorOtherCityName = payload.city;
+            document.getElementById("districtSelect").value = "other";
+            handleDistrictChange();
+            applied += 1;
+          }
         }
         if (payload.quality) {
           const match = estimatorConfig.qualityOptions.find(option => option.name.toLowerCase() === payload.quality.toLowerCase());
@@ -2241,7 +2298,7 @@
           if (type) { document.getElementById("constructionType").value = type.value; applied += 1; }
         }
         updateAreaMode();
-        const cityNotice = unmatchedCity ? ` City "${unmatchedCity}" was not matched to an enabled city; select it manually.` : "";
+        const cityNotice = unmatchedCity ? ` "${unmatchedCity}" is not in the city list, so Other was selected. Add its city and rates in Admin Dashboard to calculate a local estimate.` : "";
         status.textContent = applied ? `Parsed ${applied} project detail${applied === 1 ? "" : "s"}. Verify the inputs; prices were not generated by AI.${cityNotice}` : `No supported fields were found. Enter details manually.${cityNotice}`;
       } catch (error) {
         status.textContent = error.message;
