@@ -64,7 +64,7 @@ async function parseEstimatePrompt(prompt) {
       messages: [
         {
           role: "system",
-          content: "Extract only project details explicitly stated by the user. Do not estimate or invent prices, rates, quantities, or missing values. Return one JSON object with keys city (string or empty), area (number or null, only when the user gives square feet), areaMode (total or per-floor or null), floors (integer or null), quality (string or empty), and constructionType (string or empty). If ambiguous or absent, use null or empty strings."
+          content: "Extract only project details explicitly stated by the user. Do not estimate or invent prices, rates, quantities, or missing values. For city, return only the city or district name stated by the user, without the state or surrounding words. Return one JSON object with keys city (string or empty), area (number or null, only when the user gives square feet), areaMode (total or per-floor or null), floors (integer or null), quality (string or empty), and constructionType (string or empty). If ambiguous or absent, use null or empty strings."
         },
         { role: "user", content: prompt }
       ]
